@@ -1,4 +1,13 @@
 __pycache__/
 *.log
 *.log.*
-configs.py
+.vscode/
+.idea/
+
+dist/
+
+poetry.lock
+
+# Config files with credentials
+src/ddns_updater/configs/*.json
+!src/ddns_updater/configs/*.sample.json

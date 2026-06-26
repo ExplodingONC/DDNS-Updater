@@ -1,4 +1,0 @@
-requests[socks]
-netifaces
-paramiko
-cysystemd

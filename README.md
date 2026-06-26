@@ -1,83 +1,178 @@
-# DDNS Updater for Cloudflare / Godaddy DNS
+# DDNS Updater for Cloudflare / GoDaddy DNS
 
-Monitors local IP address changes (both IPv4 and IPV6), and updates them to Cloudflare (recommended) / Godaddy (if you are rich enough to use their paid API).
+Monitors local IP address changes (both IPv4 and IPv6), and updates them to Cloudflare or GoDaddy DNS providers.
 
-I don't like it when Godaddy just starts charging money for their basic API service with absolutely no pre-warning. So I don't recommend it to anyone. 😠
+## Features
 
-The whole structure is re-written to support both Cloudflare and Godaddy DNS, and improve (hopefully) the config process at the same time.
+- Automatic IP detection via local network interface
+- Cloudflare DNS via official Python SDK
+- GoDaddy DNS via REST API (requires paid API access)
+- SOCKS5 proxy support for GoDaddy
+- Systemd journal logging on Linux
+- Automatic log rotation
+- Systemd service installer
 
-Written for **Debian / Ubuntu** systems.  
-Some tinkering is likely needed for this to work on other Linux distributions.
+## Requirements
+
+- Python 3.12+
+- Debian/Ubuntu (other distributions may require adjustments)
+
+### System dependencies (for systemd journal support)
+
+```bash
+sudo apt-get install python3-dev libsystemd-dev
+```
+
+## Installation
+
+### Via pipx (recommended)
+
+```bash
+pipx install --global git+https://github.com/yourusername/DDNS-Updater.git
+```
+
+### Via pip
+
+```bash
+pip install git+https://github.com/yourusername/DDNS-Updater.git
+```
+
+## Configuration
+
+### 1. Export sample configs
+
+```bash
+sudo ddns-updater-install
+```
+
+This creates `/etc/ddns_updater/` with sample configuration files.
+
+### 2. Edit configuration file
+
+Edit `/etc/ddns_updater/ddns_config.json` with your DNS provider credentials and domain settings.
+
+**Never share this file or commit it to version control!**
+
+### Configuration format
+
+#### Cloudflare authentication
+
+Cloudflare supports three credential types. `zone_id` is optional and auto-fetched if omitted.
+
+**User API Token** (`cfut_`) or **Account API Token** (`cfat_`):
+
+```json
+{
+  "provider": "cloudflare",
+  "domain": "example.com",
+  "credentials": {
+    "api_token": "cfut_xxx or cfat_xxx"
+  },
+  "tasks": [...]
+}
+```
+
+**Global API Key** (`cfk_`):
+
+```json
+{
+  "provider": "cloudflare",
+  "domain": "example.com",
+  "credentials": {
+    "email": "you@example.com",
+    "api_key": "cfk_xxx"
+  },
+  "tasks": [...]
+}
+```
+
+#### Full example
+
+```json
+{
+  "targets": [
+    {
+      "provider": "cloudflare",
+      "domain": "example.com",
+      "use_proxy": false,
+      "timeout": 10,
+      "credentials": {
+        "api_token": "cfut_xxx"
+      },
+      "tasks": [
+        {
+          "name": "www",
+          "type": "AAAA",
+          "source": "local.eno4"
+        },
+        {
+          "name": "@",
+          "type": "A",
+          "source": "local.enp1s0"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Source formats
+
+- `"local.<interface>"` - Read IP from a specific network interface (e.g., `"local.eno4"`)
+- `"local"` - Auto-detect network interface
 
 ## Usage
 
-1. Register your domain and API keys or tokens at Cloudflare / Godaddy (refer to their sites for details).
+### Run directly
 
-2. Clone this repository to local.
+```bash
+ddns-updater
+```
 
-3. Install requirements according to `requirements.txt`.  
-If you intend to run it as a systemd service, you might need to use `sudo pip install ...`, or dig around with your specific python environment setup.
+### Run as systemd service
 
-    1. You might need to install `python3-dev` and  `libsystemd-dev` with the following command, for `cysystemd` to work.
-        
-        ```
-        sudo apt-get install python3-dev
-        sudo apt-get install libsystemd-dev
-        ```
+The installer sets up the service automatically:
 
-    2. You can also ignore `cysystemd` if you don't need to keep its log in systemd journald. Just comment out these lines in `logger.py` accordingly.
+```bash
+sudo ddns-updater-install
+```
 
-        ```
-        # from systemd import journal
-        ...
-        # journal_handler = journal.JournalHandler()
-        # journal_handler.setFormatter(formatter)
-        # DDNS_logger.addHandler(journal_handler)
-        ```
+Or manually:
 
-4. Modify file `configs sample.py` under the root directory, and `router_cfg sample.py` under `local_utils` of this repository. Instructions are included in the files.
+```bash
+sudo systemctl start ddns-updater
+sudo systemctl enable ddns-updater  # optional, start on boot
+```
 
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**Never share them with other people!** Or you might get hacked / lose your domain forever!
+### Check status
 
-5. You can goofing / digging around to change other things, like if you do not use an Asus router and want to implement something else, or remove this function which gets IP info from the router.
+```bash
+systemctl status ddns-updater
+journalctl -u ddns-updater -f  # follow logs
+```
 
-6. Run `ddns_updater.py` to test it out.
+## Project structure
 
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Note that only public IP address will be updated.
+```
+ddns_updater/
+├── __init__.py
+├── __main__.py           # python -m ddns_updater entry point
+├── ddns_updater.py       # main entry point
+├── ddns_task.py          # core task logic
+├── config_loader.py      # JSON config loading
+├── logger.py             # logging setup
+├── install.py            # systemd service installer
+├── configs/              # sample configs
+├── interface_handlers/   # IP detection
+│   ├── abstract_handler.py
+│   └── localhost.py      # local interface via psutil
+└── dns_api/              # DNS provider implementations
+    ├── abstract_api.py
+    ├── cloudflare_api.py
+    ├── godaddy_api.py
+    └── utils.py
+```
 
-7. If things are going fine for you, register this script as a systemd service.
+## License
 
-    1. Create a file named `/etc/systemd/system/ddns-updater.service`
-
-    2. Edit the file as below, with your own username and path:
-        ```
-        [Unit]
-        Description=DDNS updater for Godaddy DNS
-        After=network.target
-        # Or after your proxy service if you are using one
-        StartLimitBurst=5
-        StartLimitIntervalSec=30
-
-        [Service]
-        Type=simple
-        Restart=on-failure
-        RestartSec=5
-        User=<your user name>
-        ExecStart=/bin/python3 /home/<user>/services/ddns_updater/ddns_updater.py
-
-        [Install]
-        WantedBy=multi-user.target
-        ```
-
-    3. Register and start your service.
-        ```
-        sudo systemctl daemon-reload
-        sudo systemctl start ddns-updater.service
-        ```
-        
-    4. Optionally get it to start on boot:
-        ```
-        sudo systemctl enable ddns-updater.service
-        ```
-
-8. Et Voila!
+See LICENSE file.

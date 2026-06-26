@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "ddns-updater"
+version = "0.1.0"
+description = ""
+authors = ["ExplodingONC <zhangxinyue9825@hotmail.com>"]
+readme = "README.md"
+packages = [{include = "ddns_updater", from = "src"}]
+
+[tool.poetry.scripts]
+ddns-updater = "ddns_updater.ddns_updater:main"
+ddns-updater-install = "ddns_updater.install:main"
+
+[tool.poetry.dependencies]
+python = ">=3.12"
+requests = {extras = ["socks"], version = "^2.34.2"}
+psutil = "^7.0.0"
+cysystemd = {version = "^2.0.5", markers = "sys_platform == 'linux'"}
+cloudflare = "^5.4.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

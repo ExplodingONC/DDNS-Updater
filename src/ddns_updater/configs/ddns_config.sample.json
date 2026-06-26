@@ -1,0 +1,81 @@
+{
+  "targets": [
+    {
+      "provider": "cloudflare",
+      "domain": "example.com",
+      "use_proxy": false,
+      "timeout": 10,
+      "credentials": {
+        "api_token": "cfut_example_user_token"
+      },
+      "tasks": [
+        {
+          "name": "www",
+          "type": "AAAA",
+          "source": "local.eno4"
+        },
+        {
+          "name": "@",
+          "type": "A",
+          "source": "local.enp1s0"
+        }
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "domain": "example2.com",
+      "use_proxy": false,
+      "timeout": 10,
+      "credentials": {
+        "api_token": "cfat_example_account_token",
+        "zone_id": "optional_explicit_zone_id"
+      },
+      "tasks": [
+        {
+          "name": "www",
+          "type": "AAAA",
+          "source": "local.eno4"
+        }
+      ]
+    },
+    {
+      "provider": "cloudflare",
+      "domain": "example3.com",
+      "use_proxy": false,
+      "timeout": 10,
+      "credentials": {
+        "email": "your-email@example.com",
+        "api_key": "cfk_example_global_api_key"
+      },
+      "tasks": [
+        {
+          "name": "www",
+          "type": "AAAA",
+          "source": "local.eno4"
+        }
+      ]
+    },
+    {
+      "provider": "godaddy",
+      "domain": "example.com",
+      "use_proxy": true,
+      "timeout": 10,
+      "credentials": {
+        "key": "example_key",
+        "secret": "example_secret"
+      },
+      "tasks": [
+        {
+          "name": "www",
+          "type": "AAAA",
+          "source": "local.eno4"
+        },
+        {
+          "name": "@",
+          "type": "A",
+          "source": "local.enp1s0"
+        }
+      ]
+    }
+  ]
+}
