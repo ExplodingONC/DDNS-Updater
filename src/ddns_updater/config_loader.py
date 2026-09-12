@@ -3,15 +3,20 @@
 Reads the ``ddns_config.json`` configuration file. On Linux the system
 config directory ``/etc/ddns_updater/`` is checked first; if not found
 the bundled sample config under ``configs/`` is used as fallback.
+
+Cloudflare credentials are resolved in order:
+1. Per-target ``credentials`` in ``ddns_config.json``
+2. Environment variables ``CLOUDFLARE_API_TOKEN``, ``CLOUDFLARE_EMAIL``,
+   ``CLOUDFLARE_API_KEY``, ``CLOUDFLARE_ZONE_ID``
 """
 
 import json
+import os
 import pathlib
 from dataclasses import dataclass
 from typing import TypedDict
 from .dns_api import AbstractDNSConfig, RECORD_TYPE
 from .dns_api.cloudflare_api import CloudflareDNSConfig, CloudflareDNSApi
-from .dns_api.godaddy_api import GodaddyDNSConfig, GodaddyDNSApi
 
 _SAMPLE_CONFIGS_DIR = pathlib.Path(__file__).parent / "configs"
 """Path to the bundled sample configuration files."""
@@ -21,9 +26,25 @@ _SYSTEM_CONFIGS_DIR = pathlib.Path("/etc/ddns_updater")
 
 _PROVIDER_MAP = {
     "cloudflare": (CloudflareDNSConfig, CloudflareDNSApi),
-    "godaddy": (GodaddyDNSConfig, GodaddyDNSApi),
 }
 """Mapping of provider names to their (config class, API class) tuples."""
+
+
+@dataclass
+class UniFiCredentials:
+    """Credentials for accessing a UniFi controller.
+
+    :var controller_url: Base URL of the UniFi controller.
+    :vartype controller_url: str
+    :var username: UniFi OS username.
+    :vartype username: str
+    :var password: UniFi OS password.
+    :vartype password: str
+    """
+
+    controller_url: str = "https://192.168.0.1"
+    username: str = ""
+    password: str = ""
 
 
 @dataclass
@@ -34,13 +55,18 @@ class DDNSTaskConfig:
     :vartype name: str
     :var type: DNS record type (e.g. ``"A"``, ``"AAAA"``).
     :vartype type: RECORD_TYPE
-    :var source: IP source in ``"local"`` or ``"local.<interface>"`` format.
+    :var source: IP source in ``"local"``, ``"local.<interface>"``,
+        ``"unifi"``, or ``"unifi.<site_name>"`` format.
     :vartype source: str
+    :var unifi_credentials: UniFi controller credentials (required
+        when source starts with ``"unifi"``).
+    :vartype unifi_credentials: UniFiCredentials | None
     """
 
     name: str = "www"
     type: RECORD_TYPE = "AAAA"
     source: str = "local"
+    unifi_credentials: UniFiCredentials | None = None
 
 
 class DDNSTargetConfig(TypedDict):
@@ -96,19 +122,41 @@ def _load_target_config(target: dict) -> DDNSTargetConfig:
     provider = target["provider"].lower()
     config_cls, handler_cls = _PROVIDER_MAP[provider]
 
+    credentials = target.get("credentials", {})
+
+    if provider == "cloudflare" and not credentials:
+        credentials = {}
+        if token := os.environ.get("CLOUDFLARE_API_TOKEN"):
+            credentials["api_token"] = token
+        if email := os.environ.get("CLOUDFLARE_EMAIL"):
+            credentials["email"] = email
+        if api_key := os.environ.get("CLOUDFLARE_API_KEY"):
+            credentials["api_key"] = api_key
+        if zone_id := os.environ.get("CLOUDFLARE_ZONE_ID"):
+            credentials["zone_id"] = zone_id
+
     dns_config = config_cls(
         handler_class=handler_cls,
-        use_proxy=target.get("use_proxy", False),
         domain=target["domain"],
         timeout=target.get("timeout", 10),
-        **target.get("credentials", {}),
+        **credentials,
     )
+
+    unifi_creds_raw = target.get("unifi_credentials")
+    unifi_credentials = None
+    if unifi_creds_raw:
+        unifi_credentials = UniFiCredentials(
+            controller_url=unifi_creds_raw.get("controller_url", "https://192.168.0.1"),
+            username=unifi_creds_raw.get("username", ""),
+            password=unifi_creds_raw.get("password", ""),
+        )
 
     tasks = [
         DDNSTaskConfig(
             name=t["name"],
             type=t["type"],
             source=t.get("source", "local"),
+            unifi_credentials=unifi_credentials,
         )
         for t in target.get("tasks", [])
     ]

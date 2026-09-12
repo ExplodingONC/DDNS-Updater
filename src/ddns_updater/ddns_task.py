@@ -10,11 +10,11 @@ from dataclasses import dataclass
 
 import logging
 
-from .interface_handlers import Localhost
+from .interface_handlers import Localhost, UnifiGateway
 
 from .dns_api import RECORD_TYPE, AbstractDNSApi, AbstractDNSConfig
-from .dns_api.utils import ProxyHelper, DNSRecord
-from .config_loader import DDNSTaskConfig
+from .dns_api.utils import DNSRecord
+from .config_loader import DDNSTaskConfig, UniFiCredentials
 
 
 @dataclass
@@ -74,13 +74,12 @@ class DDNSTask:
         self.logger = logging.getLogger(__name__)
         self.logger.warning(f"DDNS task <{self.task_name}> created!")
 
-        self.use_proxy: bool = api_config.use_proxy
-        self.proxy_helper = ProxyHelper()
         self.api_handler: AbstractDNSApi = api_config.handler_class(api_config)
 
         self.task_configs = task_configs
         self.tasks: list[DDNSTaskTracker] = []
         self._local_handlers: dict[str, Localhost] = {}
+        self._unifi_handlers: dict[str, UnifiGateway] = {}
 
         for task_config in self.task_configs:
             record_args = {"domain": self.domain, "name": task_config.name, "type": task_config.type}
@@ -91,6 +90,20 @@ class DDNSTask:
             kind, interface = _parse_source(task_config.source)
             if kind == "local" and interface and interface not in self._local_handlers:
                 self._local_handlers[interface] = Localhost(interface=interface)
+            elif kind == "unifi":
+                site_name = interface or "default"
+                if site_name not in self._unifi_handlers:
+                    if not task_config.unifi_credentials:
+                        self.logger.warning(
+                            f"UniFi credentials required for source '{task_config.source}'"
+                        )
+                        continue
+                    self._unifi_handlers[site_name] = UnifiGateway(
+                        controller_url=task_config.unifi_credentials.controller_url,
+                        username=task_config.unifi_credentials.username,
+                        password=task_config.unifi_credentials.password,
+                        site_name=site_name,
+                    )
 
     def fetch_dns_record(self, task_tracker: DDNSTaskTracker):
         """Fetch the current remote DNS record for a task tracker.
@@ -161,27 +174,53 @@ class DDNSTask:
                         else:
                             self.logger.info(f"DDNS for IPv6 is up to date...")
 
+            elif kind == "unifi":
+                site_name = interface or "default"
+                unifi_handler = self._unifi_handlers.get(site_name)
+                if not unifi_handler:
+                    self.logger.warning(f"UniFi handler for site '{site_name}' not available")
+                    continue
+
+                if task_tracker.config.type == "A":
+                    current_ipv4 = unifi_handler.get_ipv4_ip()
+                    if current_ipv4 is None:
+                        self.logger.warning("UniFi gateway IPv4 address not available")
+                        continue
+                    task_tracker.local_record.value = str(current_ipv4)
+                    self.logger.info(f"UniFi gateway IPv4 address is {current_ipv4} "
+                                    f"({'is' if current_ipv4.is_private else 'not'} private)")
+                    if not current_ipv4.is_private:
+                        if task_tracker.remote_record is None or str(current_ipv4) != task_tracker.remote_record.value:
+                            self.logger.warning(f"DDNS update for IPv4 is needed...")
+                            self.push_dns_record(task_tracker=task_tracker)
+                        else:
+                            self.logger.info(f"DDNS for IPv4 is up to date...")
+
+                elif task_tracker.config.type == "AAAA":
+                    current_ipv6 = unifi_handler.get_ipv6_ip()
+                    if current_ipv6 is None:
+                        self.logger.warning("UniFi gateway IPv6 address not available")
+                        continue
+                    task_tracker.local_record.value = str(current_ipv6)
+                    self.logger.info(f"UniFi gateway IPv6 address is {current_ipv6} "
+                                    f"({'is' if current_ipv6.is_private else 'not'} private)")
+                    if not current_ipv6.is_private:
+                        if task_tracker.remote_record is None or str(current_ipv6) != task_tracker.remote_record.value:
+                            self.logger.warning(f"DDNS update for IPv6 is needed...")
+                            self.push_dns_record(task_tracker=task_tracker)
+                        else:
+                            self.logger.info(f"DDNS for IPv6 is up to date...")
+
     def run(self):
         """Run the DDNS monitoring loop indefinitely.
 
-        Enables the SOCKS5 proxy if configured, then executes
-        ``main()`` every 60 seconds. Catches and logs all exceptions
-        to keep the loop alive.
+        Executes ``main()`` every 60 seconds. Catches and logs all
+        exceptions to keep the loop alive.
         """
-        try:
-            if self.use_proxy:
-                self.proxy_helper.set_proxy()
-
-            while True:
-                try:
-                    self.main()
-                    time.sleep(60)
-                except Exception as e:
-                    self.logger.warning(f"DDNS update attempt failed: {e}")
-                    self.logger.exception(e)
-        except Exception as e:
+        while True:
+            try:
+                self.main()
+                time.sleep(60)
+            except Exception as e:
+                self.logger.warning(f"DDNS update attempt failed: {e}")
                 self.logger.exception(e)
-
-        finally:
-            if self.use_proxy:
-                self.proxy_helper.unset_proxy()
