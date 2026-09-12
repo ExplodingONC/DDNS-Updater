@@ -1,66 +1,56 @@
 """Root logger configuration for the DDNS updater application.
 
 Provides ``setup_root_logger`` which configures the root logger with
-stdout, file, and systemd journal handlers. Call once at application
-startup; all modules then use ``logging.getLogger(__name__)`` directly.
+stdout and optionally file handlers. Call once at application startup;
+all modules then use ``logging.getLogger(__name__)`` directly.
+
+Environment variables:
+    DDNS_LOG_DIR: Directory for log files. Defaults to
+        ``/var/log/ddns_updater``. Set to ``/dev/null`` to disable
+        file logging.
+    DDNS_LOG_LEVEL: Minimum log level. Defaults to ``INFO``.
 """
 
+import os
 import sys
 import logging
 import pathlib
-import platform
 from logging import handlers
 
-if platform.system() == "Linux":
-    try:
-        from cysystemd import journal  # noqa
-    except ImportError:
-        journal = None
 
-
-def setup_root_logger(level: int | str = logging.INFO) -> logging.Logger:
+def setup_root_logger() -> logging.Logger:
     """Configure and return the root application logger.
 
-    Sets up the root logger with a stdout stream handler, a daily
-    rotating file handler, and on Linux systems a systemd journal
-    handler. Log files are rotated at midnight with up to 20 backups
-    retained.
+    Sets up the root logger with a stdout stream handler. File logging
+    is controlled by the ``DDNS_LOG_DIR`` environment variable.
 
-    On Linux the log file is written to ``/var/log/ddns_updater/``.
-    On other platforms it is written to the current working directory.
-
-    :param level: Minimum logging level (default ``logging.INFO``).
-    :type level: int | str
     :returns: The configured root logger instance.
     :rtype: logging.Logger
     """
 
+    level = os.environ.get("DDNS_LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, level, logging.INFO)
+
     logger = logging.getLogger()
-    logger.setLevel(level=level)
+    logger.setLevel(level=log_level)
 
-    # log file path
-    if platform.system() == "Linux":
-        log_dir = pathlib.Path("/var/log/ddns_updater")
-    else:
-        log_dir = pathlib.Path.cwd()
-    log_file = log_dir / "ddns_updater.log"
-
-    # set formatter
     formatter = logging.Formatter('%(asctime)s | %(name)s - %(levelname)s | %(message)s')
 
-    # add handlers
-    if platform.system() == "Linux" and journal is not None:
-        journal_handler = journal.JournaldLogHandler()
-        journal_handler.setFormatter(formatter)
-        logger.addHandler(journal_handler)
+    # stdout handler (always)
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setFormatter(formatter)
     logger.addHandler(stdout_handler)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    file_handler = handlers.TimedRotatingFileHandler(
-        filename=log_file, backupCount=20,
-        when="midnight", interval=1)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+
+    # file handler (configurable via DDNS_LOG_DIR)
+    log_dir = os.environ.get("DDNS_LOG_DIR", "/var/log/ddns_updater")
+    if log_dir and log_dir != "/dev/null":
+        log_path = pathlib.Path(log_dir)
+        log_path.mkdir(parents=True, exist_ok=True)
+        log_file = log_path / "ddns_updater.log"
+        file_handler = handlers.TimedRotatingFileHandler(
+            filename=log_file, backupCount=20,
+            when="midnight", interval=1)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
     return logger

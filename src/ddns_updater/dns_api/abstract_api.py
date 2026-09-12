@@ -21,8 +21,6 @@ class AbstractDNSConfig:
 
     :var handler_class: The ``AbstractDNSApi`` subclass to instantiate.
     :vartype handler_class: AbstractDNSApi
-    :var use_proxy: Whether to route API calls through a SOCKS5 proxy.
-    :vartype use_proxy: bool
     :var domain: The DNS domain to manage (e.g. ``example.com``).
     :vartype domain: str
     :var timeout: HTTP request timeout in seconds.
@@ -30,7 +28,6 @@ class AbstractDNSConfig:
     """
 
     handler_class: type[AbstractDNSApi] = None
-    use_proxy: bool = False
     domain: str = ""
     timeout: float = 10
 

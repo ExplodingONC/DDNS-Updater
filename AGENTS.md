@@ -1,6 +1,6 @@
 # DDNS-Updater
 
-Dynamic DNS updater that monitors local IP changes and syncs them to Cloudflare or GoDaddy DNS providers.
+Dynamic DNS updater that monitors local IP changes and syncs them to Cloudflare DNS.
 
 ## Project Structure
 
@@ -9,35 +9,32 @@ DDNS-Updater/
 ├── src/ddns_updater/
 │   ├── ddns_updater.py      # Entry point - thread pool launcher
 │   ├── ddns_task.py          # Core task logic - IP detection & DNS sync loop
-│   ├── logger.py             # TaskLogger - file, stdout, systemd journal logging
-│   ├── config_loader.py      # Loads 3 config JSON files, builds config objects
+│   ├── logger.py             # TaskLogger - stdout & file logging
+│   ├── config_loader.py      # Loads config JSON, builds config objects
 │   ├── configs/
-│   │   ├── ddns_config.sample.json  # DNS providers & task targets (copy to ddns_config.json)
-│   │   └── router_config.sample.json # Router SSH credentials (copy to router_config.json)
+│   │   └── ddns_config.sample.json  # Cloudflare credentials & task targets (copy to ddns_config.json)
 │   ├── dns_api/
 │   │   ├── abstract_api.py   # AbstractDNSApi/AbstractDNSConfig base classes
 │   │   ├── cloudflare_api.py # Cloudflare DNS implementation
-│   │   ├── godaddy_api.py    # GoDaddy DNS implementation
-│   │   └── utils.py          # DNSRecord, ProxyHelper, RECORD_TYPE
-│   └── local_utils/
-│       ├── localhost.py       # Local IP detection via psutil
-│       └── asus_router.py    # ASUS router WAN IP via SSH (paramiko)
-├── logs/                     # Runtime log files
-└── pyproject.toml            # Poetry config
+│   │   └── utils.py          # DNSRecord, RECORD_TYPE
+│   └── interface_handlers/
+│       ├── abstract_handler.py
+│       └── localhost.py       # Local IP detection via psutil
+├── pyproject.toml            # PEP 621 config (hatchling build)
+├── Dockerfile                # Multi-stage Docker build
+├── docker-compose.yml        # Docker Compose config
+└── .dockerignore
 ```
 
 ## Design Overview
 
 - **Entry point**: `ddns_updater.py` spawns one thread per domain config via `ThreadPool`.
-- **Task loop**: Each `DDNSTask` runs an infinite loop, checking IPs every 60-120s (randomized).
-- **IP sources**: `"local.<interface>"` (via psutil on specified interface, e.g. `"local.eno4"`) or `"router"` (via SSH to ASUS router). Interface is optional; omit for auto-detection.
-- **DNS providers**: Abstract `AbstractDNSApi` with Cloudflare and GoDaddy implementations. Each provider has its own config dataclass extending `AbstractDNSConfig`.
-- **Update logic**: Compares local IP to remote DNS record. Pushes update if different. Removes record if NAT/private IP detected (router mode).
-- **Proxy support**: SOCKS5 proxy via environment variable for GoDaddy API.
-- **Logging**: `TaskLogger` writes to stdout, log files (rotated daily), and systemd journal.
-- **Config**: Two JSON files under `configs/`, all gitignored (samples are not):
-  - `configs/ddns_config.json` — DNS providers, domains, and task definitions
-  - `configs/router_config.json` — ASUS router SSH credentials
+- **Task loop**: Each `DDNSTask` runs an infinite loop, checking IPs every 60 seconds.
+- **IP sources**: `"local.<interface>"` (via psutil on specified interface, e.g. `"local.eno4"`) or `"local"` (auto-detect).
+- **DNS providers**: Abstract `AbstractDNSApi` with Cloudflare implementation.
+- **Update logic**: Compares local IP to remote DNS record. Pushes update if different.
+- **Logging**: `TaskLogger` writes to stdout and optionally to log files.
+- **Config**: `ddns_config.json` mounted via Docker volume (gitignored; sample is tracked).
 
 ## Key Conventions
 
@@ -45,7 +42,37 @@ DDNS-Updater/
 - Absolute imports using `src.ddns_updater.*` prefix
 - `RECORD_TYPE = Literal["A", "AAAA", "CNAME", "MX", "NS", "SOA", "SRV", "TXT"]`
 - Credentials in `configs/*.json` (all gitignored; `.sample.json` files are tracked)
-- Run as systemd service on Debian/Ubuntu
+- Docker-only deployment
+
+## Build System
+
+- **Package manager**: uv (migrated from Poetry)
+- **Build backend**: hatchling
+- **Python**: >=3.14
+- **Dependencies**: psutil, cloudflare, requests
+
+### Common commands
+
+```bash
+# Install dependencies
+uv sync
+
+# Run directly
+uv run ddns-updater
+
+# Build package
+uv build
+
+# Install locally
+uv tool install --system .
+```
+
+## Docker
+
+```bash
+# Build image (from source repo)
+docker build -t ddns-updater .
+```
 
 ## Adding a New DNS Provider
 
@@ -53,3 +80,4 @@ DDNS-Updater/
 2. Define a config dataclass extending `AbstractDNSConfig`
 3. Implement `AbstractDNSApi` with `get_record`, `set_record`, `delete_record`
 4. Export from `dns_api/__init__.py`
+5. Register in `_PROVIDER_MAP` in `config_loader.py`

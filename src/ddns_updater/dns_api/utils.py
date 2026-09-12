@@ -1,12 +1,9 @@
-"""Shared DNS data models and proxy helper utilities.
+"""Shared DNS data models and utilities.
 
-Defines the RECORD_TYPE literal, DNSRecord and DNSRecordQueryKey
-dataclasses used across DNS provider implementations, and a
-ProxyHelper class for managing SOCKS5 proxy environment variables.
+Defines the RECORD_TYPE literal and DNSRecord dataclass used across
+DNS provider implementations.
 """
 
-import os
-import logging
 from typing import Literal
 from dataclasses import dataclass
 
@@ -59,27 +56,3 @@ class DNSRecord:
     value: str = ""
     ttl: int = 600
     comment: str = ""
-
-
-class ProxyHelper:
-    """Manages the ``ALL_PROXY`` environment variable for SOCKS5 proxy support."""
-
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
-
-    def set_proxy(self, proxy: str = "socks5://localhost:10808"):
-        """Enable a SOCKS5 proxy by setting the ``ALL_PROXY`` env var.
-
-        :param proxy: Proxy URL (default ``socks5://localhost:10808``).
-        :type proxy: str
-        """
-        self.logger.warning("Setting proxy service...")
-        os.environ["ALL_PROXY"] = proxy
-        self.logger.warning(f"Proxy service set as \"{os.environ.get('ALL_PROXY')}\"!")
-
-    def unset_proxy(self):
-        """Disable the proxy by removing the ``ALL_PROXY`` env var."""
-        self.logger.warning("Removing proxy service...")
-        if os.environ.get("ALL_PROXY") is not None:
-            os.environ.pop("ALL_PROXY")
-        self.logger.warning("Proxy service removed!")

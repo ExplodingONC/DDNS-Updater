@@ -5,9 +5,22 @@ __pycache__/
 .idea/
 
 dist/
+build/
+*.egg-info/
 
+.venv/
+venv/
+
+uv.lock
 poetry.lock
 
 # Config files with credentials
 src/ddns_updater/configs/*.json
 !src/ddns_updater/configs/*.sample.json
+
+# Docker
+docker-compose.yml
+docker-compose.override.yml
+
+# Docs
+docs/

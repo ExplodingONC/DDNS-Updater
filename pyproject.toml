@@ -1,23 +1,23 @@
-[tool.poetry]
+[project]
 name = "ddns-updater"
 version = "0.1.0"
-description = ""
-authors = ["ExplodingONC <zhangxinyue9825@hotmail.com>"]
+description = "Dynamic DNS updater that monitors local IP changes and syncs them to Cloudflare DNS."
 readme = "README.md"
-packages = [{include = "ddns_updater", from = "src"}]
+authors = [{ name = "ExplodingONC", email = "zhangxinyue9825@hotmail.com" }]
+requires-python = ">=3.14"
+license = { text = "MIT" }
+dependencies = [
+    "psutil>=7.0.0",
+    "cloudflare>=5.4.0",
+    "requests>=2.31.0",
+]
 
-[tool.poetry.scripts]
+[project.scripts]
 ddns-updater = "ddns_updater.ddns_updater:main"
-ddns-updater-install = "ddns_updater.install:main"
-
-[tool.poetry.dependencies]
-python = ">=3.12"
-requests = {extras = ["socks"], version = "^2.34.2"}
-psutil = "^7.0.0"
-cysystemd = {version = "^2.0.5", markers = "sys_platform == 'linux'"}
-cloudflare = "^5.4.0"
-
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ddns_updater"]
