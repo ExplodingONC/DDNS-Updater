@@ -20,7 +20,10 @@ RUN useradd --create-home ddns-updater
 
 COPY --from=astral/uv:latest /uv /usr/local/bin/uv
 COPY --from=builder /app/dist/*.whl /tmp/
-RUN uv pip install --system --break-system-packages --no-cache /tmp/*.whl \
+RUN printf 'Types: deb\nURIs: https://mirrors.tuna.tsinghua.edu.cn/debian\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n\nTypes: deb\nURIs: https://mirrors.tuna.tsinghua.edu.cn/debian-security\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' > /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv pip install --system --break-system-packages --no-cache /tmp/*.whl \
     && rm -rf /tmp/*.whl \
     && mkdir -p /etc/ddns_updater /var/log/ddns_updater \
     && chown ddns-updater:ddns-updater /var/log/ddns_updater
