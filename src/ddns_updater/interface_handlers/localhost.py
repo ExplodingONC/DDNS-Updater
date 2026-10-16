@@ -47,28 +47,39 @@ class Localhost(AbstractInterfaceHandler):
                                 f"{e}")
             return None
 
-    def _get_ipv6_candidates(self) -> list[tuple[ipaddress.IPv6Address, int]]:
+    #: Address flags that mark an address as unsuitable for publishing as an
+    #: inbound endpoint. ``temporary`` is an RFC 8981 privacy address that
+    #: rotates on the kernel's privacy schedule; ``deprecated`` is one that has
+    #: already been superseded. Neither should be handed out as a service
+    #: address, because the record goes stale every time the address changes.
+    _EPHEMERAL_ADDR_FLAGS = frozenset({"temporary", "deprecated"})
+
+    def _get_ipv6_candidates(self) -> list[tuple[ipaddress.IPv6Address, int, bool]]:
         """Parse ``ip -6 addr show`` to get global IPv6 addresses with lifetimes.
 
-        :returns: A list of ``(address, valid_lft_seconds)`` tuples for
-            global-scope non-link-local addresses, sorted by descending
-            remaining lifetime.
-        :rtype: list[tuple[ipaddress.IPv6Address, int]]
+        Each candidate is tagged with whether it is *stable*, meaning a global
+        address carrying neither ``temporary`` nor ``deprecated``.
+
+        :returns: A list of ``(address, valid_lft_seconds, is_stable)`` tuples
+            for global-scope non-link-local addresses, sorted with stable
+            addresses first and longest remaining lifetime within each group.
+        :rtype: list[tuple[ipaddress.IPv6Address, int, bool]]
         """
         result = subprocess.run(
             ["ip", "-6", "addr", "show", "dev", self.interface],
             capture_output=True, text=True, timeout=5,
         )
         lines = result.stdout.splitlines()
-        candidates: list[tuple[ipaddress.IPv6Address, int]] = []
+        candidates: list[tuple[ipaddress.IPv6Address, int, bool]] = []
         i = 0
         while i < len(lines):
             m = re.match(
-                r'\s+inet6\s+([0-9a-f:]+)/\d+\s+scope\s+(\w+)',
+                r'\s+inet6\s+([0-9a-f:]+)/\d+\s+scope\s+(\w+)(.*)$',
                 lines[i],
             )
             if m:
                 addr_str, scope = m.group(1), m.group(2)
+                flags = frozenset(m.group(3).split())
                 valid_lft = 0
                 if i + 1 < len(lines):
                     lft_m = re.search(r'valid_lft\s+(\d+)sec', lines[i + 1])
@@ -78,33 +89,44 @@ class Localhost(AbstractInterfaceHandler):
                         valid_lft = 2**32
                 if scope == 'global' and not addr_str.startswith('fe80:'):
                     try:
+                        is_stable = not (flags & self._EPHEMERAL_ADDR_FLAGS)
                         candidates.append(
-                            (ipaddress.IPv6Address(addr_str), valid_lft)
+                            (ipaddress.IPv6Address(addr_str), valid_lft, is_stable)
                         )
                     except ValueError:
                         pass
             i += 1
-        candidates.sort(key=lambda x: x[1], reverse=True)
+        candidates.sort(key=lambda c: (c[2], c[1]), reverse=True)
         return candidates
 
     def get_ipv6_ip(self) -> Optional[ipaddress.IPv6Address]:
         """Return the best IPv6 address of the configured interface.
 
-        Picks the global-scope address with the longest remaining
-        ``valid_lft`` (i.e. the most recently assigned prefix). Falls
-        back to ``psutil`` if ``ip`` output parsing yields no result.
+        Prefers a *stable* global address -- one that is neither an RFC 8981
+        privacy address nor deprecated -- taking the longest remaining
+        ``valid_lft`` among those. This keeps the published record from
+        churning every time the interface rotates a temporary address. Falls
+        back to the best available ephemeral address (with a warning) when the
+        interface has no stable global address, and to ``psutil`` if ``ip``
+        output parsing yields no result.
 
-        :returns: The interface's IPv6 address, or ``None`` if no
-            IPv6 address is assigned.
+        :returns: The interface's IPv6 address, or ``None`` if no IPv6
+            address is assigned.
         :rtype: ipaddress.IPv6Address | None
         """
         try:
             candidates = self._get_ipv6_candidates()
             if candidates:
-                best = candidates[0][0]
+                best, valid_lft, is_stable = candidates[0]
+                if not is_stable:
+                    self.logger.warning(
+                        f"No stable IPv6 address on {self.interface}; "
+                        f"falling back to ephemeral address {best}"
+                    )
                 self.logger.info(
                     f"Best IPv6 candidate: {best} "
-                    f"(valid_lft {candidates[0][1]}s, "
+                    f"({'stable' if is_stable else 'ephemeral'}, "
+                    f"valid_lft {valid_lft}s, "
                     f"{len(candidates)} candidates total)"
                 )
                 return best

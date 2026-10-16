@@ -32,7 +32,7 @@ DDNS-Updater/
 - **Task loop**: Each `DDNSTask` runs an infinite loop, checking IPs every 60 seconds.
 - **IP sources**: `"local.<interface>"` (via psutil on specified interface, e.g. `"local.eno4"`) or `"local"` (auto-detect).
 - **DNS providers**: Abstract `AbstractDNSApi` with Cloudflare implementation.
-- **Update logic**: Compares local IP to remote DNS record. Pushes update if different.
+- **Update logic**: Compares local IP to remote DNS record. Pushes update if different, and collapses duplicate records (a name+type must end up with exactly one record).
 - **Logging**: `TaskLogger` writes to stdout and optionally to log files.
 - **Config**: `ddns_config.json` mounted via Docker volume (gitignored; sample is tracked).
 
@@ -78,6 +78,6 @@ docker build -t ddns-updater .
 
 1. Create a new file in `dns_api/` (e.g., `newprovider_api.py`)
 2. Define a config dataclass extending `AbstractDNSConfig`
-3. Implement `AbstractDNSApi` with `get_record`, `set_record`, `delete_record`
+3. Implement `AbstractDNSApi` with `get_records`, `get_record`, `set_record`, `delete_record` (`get_records` must return all records sharing a name+type — `None` on API error; `set_record` must leave exactly one record and delete duplicates, and must not create anything while the remote state is unknown)
 4. Export from `dns_api/__init__.py`
 5. Register in `_PROVIDER_MAP` in `config_loader.py`

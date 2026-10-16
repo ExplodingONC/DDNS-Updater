@@ -63,6 +63,25 @@ class AbstractDNSApi(ABC):
         pass
 
     @abstractmethod
+    def get_records(self, name: str, type: RECORD_TYPE) -> list[DNSRecord] | None:
+        """Retrieve all DNS records matching name and type.
+
+        Providers may hold several records for one name and type
+        (round-robin answers), so callers that intend to manage "the"
+        record need the full list to detect duplicates.
+
+        :param name: Record name (subdomain).
+        :type name: str
+        :param type: DNS record type.
+        :type type: RECORD_TYPE
+        :returns: A list of matching ``DNSRecord`` objects (empty when none
+            exists), or ``None`` when the provider call failed and the
+            remote state is therefore unknown.
+        :rtype: list[DNSRecord] | None
+        """
+        pass
+
+    @abstractmethod
     def get_record(self, name: str, type: RECORD_TYPE) -> DNSRecord | None:
         """Retrieve a single DNS record by name and type.
 
@@ -79,8 +98,11 @@ class AbstractDNSApi(ABC):
     def set_record(self, record: DNSRecord) -> bool:
         """Create or update a DNS record.
 
-        If a record with the same name and type already exists it is
-        updated; otherwise a new record is created.
+        Implementations must leave **exactly one** record for the name and
+        type: update an existing record in place (or create one when none
+        exists) and remove any duplicates. When the current remote state
+        cannot be fetched, nothing may be written — creating a record on
+        top of an unknown state is how duplicates are born.
 
         :param record: The ``DNSRecord`` to upsert.
         :type record: DNSRecord
@@ -91,14 +113,14 @@ class AbstractDNSApi(ABC):
 
     @abstractmethod
     def delete_record(self, name: str, type: RECORD_TYPE) -> bool:
-        """Delete a DNS record by name and type.
+        """Delete all DNS records matching name and type.
 
         :param name: Record name (subdomain).
         :type name: str
         :param type: DNS record type.
         :type type: RECORD_TYPE
-        :returns: ``True`` on success, ``False`` on failure or if the record
-            does not exist.
+        :returns: ``True`` on success, ``False`` on failure or if no record
+            exists.
         :rtype: bool
         """
         pass

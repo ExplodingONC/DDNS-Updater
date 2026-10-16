@@ -109,10 +109,24 @@ class DDNSTask:
         """Fetch the current remote DNS record for a task tracker.
 
         Updates ``task_tracker.remote_record`` in place with the result
-        from the provider API.
+        from the provider API. It is set to ``None`` when no record exists,
+        when the provider call failed, or when several records share the
+        name and type — duplicates make the remote state ambiguous, and
+        clearing the tracker turns the next comparison into an update,
+        which collapses them back to a single record.
         """
-        task_tracker.remote_record = self.api_handler.get_record(name=task_tracker.config.name,
-                                                                 type=task_tracker.config.type)
+        records = self.api_handler.get_records(name=task_tracker.config.name,
+                                               type=task_tracker.config.type)
+        if records is None:
+            self.logger.warning(f"Remote state of {task_tracker.config.type} record for "
+                                f"{task_tracker.config.name} is unknown")
+            task_tracker.remote_record = None
+        elif len(records) > 1:
+            self.logger.warning(f"Found {len(records)} duplicate {task_tracker.config.type} records "
+                                f"for {task_tracker.config.name}, an update will collapse them into one")
+            task_tracker.remote_record = None
+        else:
+            task_tracker.remote_record = records[0] if records else None
 
     def push_dns_record(self, task_tracker: DDNSTaskTracker):
         """Push the local record to the DNS provider and refresh the remote state."""

@@ -121,6 +121,58 @@ class CloudflareDNSApi(AbstractDNSApi):
             )
             return []
 
+    def get_records(self, name: str, type: RECORD_TYPE) -> list[DNSRecord] | None:
+        """Fetch all DNS records matching name and type from Cloudflare.
+
+        Cloudflare allows several records to share one name and type
+        (round-robin answers), so callers managing "the" record need the
+        full list to detect duplicates.
+
+        :param name: Record name (subdomain).
+        :type name: str
+        :param type: DNS record type.
+        :type type: RECORD_TYPE
+        :returns: A list of matching ``DNSRecord`` objects (empty when none
+            exists), or ``None`` when the API call failed and the remote
+            state is therefore unknown.
+        :rtype: list[DNSRecord] | None
+        """
+        full_name = name + "." + self.domain
+        try:
+            page = self.client.dns.records.list(
+                zone_id=self.zone_id,
+                name={"exact": full_name},  # type: ignore[assignment]
+                type=type,  # type: ignore[assignment]
+            )
+            self.logger.info(f"Succeeded to get {type} record(s) for {name}")
+            self.logger.debug(f"Got {len(page.result)} result(s)")
+            return [
+                DNSRecord(
+                    domain=self.domain,
+                    name=name,
+                    type=type,
+                    id=result.id,
+                    value=result.content or "",
+                    ttl=int(result.ttl),
+                    comment=result.comment or "",
+                )
+                for result in page.result
+            ]
+        except cloudflare.APIStatusError as e:
+            self.logger.warning(
+                f"Failed to fetch {type} record(s) for {name}:\n"
+                f"Status Code: {e.status_code}\n"
+                f"Response: {e.response}\n"
+                f"Exception: {e}"
+            )
+            return None
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to fetch {type} record(s) for {name}:\n"
+                f"Exception: {e}"
+            )
+            return None
+
     def get_record(self, name: str, type: RECORD_TYPE) -> DNSRecord | None:
         """Fetch a DNS record from Cloudflare by name and type.
 
@@ -132,56 +184,40 @@ class CloudflareDNSApi(AbstractDNSApi):
             ``None`` if the record is not found or an error occurs.
         :rtype: DNSRecord | None
         """
-        full_name = name + "." + self.domain
-        try:
-            page = self.client.dns.records.list(
-                zone_id=self.zone_id,
-                name={"exact": full_name},  # type: ignore[assignment]
-                type=type,  # type: ignore[assignment]
-            )
-            self.logger.info(f"Succeeded to get {type} record for {name}")
-            self.logger.debug(f"Got {len(page.result)} result(s)")
-            if len(page.result) > 0:
-                result = page.result[0]
-                return DNSRecord(
-                    domain=self.domain,
-                    name=name,
-                    type=type,
-                    id=result.id,
-                    value=result.content or "",
-                    ttl=int(result.ttl),
-                    comment=result.comment or "",
-                )
-            else:
-                self.logger.warning(f"No {type} record is found for {name}")
-                return None
-        except cloudflare.APIStatusError as e:
-            self.logger.warning(
-                f"Failed to fetch {type} record for {name}:\n"
-                f"Status Code: {e.status_code}\n"
-                f"Response: {e.response}\n"
-                f"Exception: {e}"
-            )
+        records = self.get_records(name, type)
+        if records is None:
             return None
-        except Exception as e:
-            self.logger.warning(
-                f"Failed to fetch {type} record for {name}:\n"
-                f"Exception: {e}"
-            )
+        if not records:
+            self.logger.warning(f"No {type} record is found for {name}")
             return None
+        return records[0]
 
     def set_record(self, record: DNSRecord) -> bool:
         """Create or update a DNS record on Cloudflare.
 
-        If a record with the same name and type already exists it is
-        updated in place; otherwise a new unproxied record is created.
+        Exactly one record is kept for the name and type: the kept record is
+        updated in place (or created when none exists) and any other record
+        sharing the name and type is deleted. When the current remote state
+        cannot be fetched, nothing is written — creating a record on top of
+        an unknown state is how duplicate records are born.
 
         :param record: The ``DNSRecord`` to upsert.
         :type record: DNSRecord
         :returns: ``True`` on success, ``False`` on failure.
         :rtype: bool
         """
-        record_to_update = self.get_record(record.name, record.type)
+        existing = self.get_records(record.name, record.type)
+        if existing is None:
+            self.logger.warning(
+                f"Skipping set of {record.type} record for {record.name} as {record.value}: "
+                f"remote state unknown, refusing to risk a duplicate record"
+            )
+            return False
+        # Keep a record already carrying the desired value if there is one,
+        # so a resolvable record is never needlessly replaced.
+        record_to_update = next(
+            (r for r in existing if r.value == record.value), existing[0] if existing else None
+        )
         try:
             if record_to_update and record_to_update.id:
                 self.client.dns.records.update(  # type: ignore[call-overload]
@@ -204,7 +240,6 @@ class CloudflareDNSApi(AbstractDNSApi):
             self.logger.info(
                 f"Succeeded to set {record.type} record for {record.name} as {record.value}"
             )
-            return True
         except cloudflare.APIStatusError as e:
             self.logger.warning(
                 f"Failed to set {record.type} record for {record.name} as {record.value}:\n"
@@ -216,43 +251,73 @@ class CloudflareDNSApi(AbstractDNSApi):
         except Exception as e:
             self.logger.warning(
                 f"Failed to set {record.type} record for {record.name} as {record.value}:\n"
+                f"Exception: {e}"
+            )
+            return False
+
+        # Collapse duplicates left over from earlier runs.
+        kept_id = record_to_update.id if record_to_update else ""
+        ok = True
+        for extra in existing:
+            if extra.id and extra.id != kept_id:
+                ok = self._delete_record_by_id(extra.id, name=record.name, type=record.type) and ok
+        return ok
+
+    def _delete_record_by_id(self, record_id: str, name: str, type: RECORD_TYPE) -> bool:
+        """Delete a single Cloudflare record by its record ID.
+
+        :param record_id: The provider-specific record identifier.
+        :type record_id: str
+        :param name: Record name (subdomain), for logging only.
+        :type name: str
+        :param type: DNS record type, for logging only.
+        :type type: RECORD_TYPE
+        :returns: ``True`` on success, ``False`` on failure.
+        :rtype: bool
+        """
+        try:
+            self.client.dns.records.delete(
+                dns_record_id=record_id,
+                zone_id=self.zone_id,
+            )
+            self.logger.info(f"Succeeded to delete {type} record {record_id} for {name}")
+            return True
+        except cloudflare.APIStatusError as e:
+            self.logger.warning(
+                f"Failed to delete {type} record {record_id} for {name}:\n"
+                f"Status Code: {e.status_code}\n"
+                f"Response: {e.response}\n"
+                f"Exception: {e}"
+            )
+            return False
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to delete {type} record {record_id} for {name}:\n"
                 f"Exception: {e}"
             )
             return False
 
     def delete_record(self, name: str, type: RECORD_TYPE) -> bool:
-        """Delete a DNS record from Cloudflare by name and type.
+        """Delete all DNS records matching name and type from Cloudflare.
 
         :param name: Record name (subdomain).
         :type name: str
         :param type: DNS record type.
         :type type: RECORD_TYPE
-        :returns: ``True`` on success, ``False`` if the record does not
-            exist or an error occurs.
+        :returns: ``True`` on success, ``False`` if no record exists or an
+            error occurs.
         :rtype: bool
         """
-        record_to_delete = self.get_record(name, type)
-        if not record_to_delete or not record_to_delete.id:
+        records_to_delete = self.get_records(name, type)
+        if records_to_delete is None:
+            self.logger.warning(f"Failed to delete {type} record(s) for {name}: Remote state unknown")
+            return False
+        if not records_to_delete:
             self.logger.warning(f"Failed to delete {type} record for {name}: Not existed")
             return False
-        try:
-            self.client.dns.records.delete(
-                dns_record_id=record_to_delete.id,
-                zone_id=self.zone_id,
-            )
-            self.logger.info(f"Succeeded to delete {type} record for {name}")
-            return True
-        except cloudflare.APIStatusError as e:
-            self.logger.warning(
-                f"Failed to delete {type} record for {name}:\n"
-                f"Status Code: {e.status_code}\n"
-                f"Response: {e.response}\n"
-                f"Exception: {e}"
-            )
-            return False
-        except Exception as e:
-            self.logger.warning(
-                f"Failed to delete {type} record for {name}:\n"
-                f"Exception: {e}"
-            )
-            return False
+        ok = True
+        for record_to_delete in records_to_delete:
+            if not record_to_delete.id:
+                continue
+            ok = self._delete_record_by_id(record_to_delete.id, name=name, type=type) and ok
+        return ok
